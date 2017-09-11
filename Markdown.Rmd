@@ -1,0 +1,239 @@
+---
+title: "Stability Project"
+author: "Hannah Fried-Petersen"
+date: "June 26, 2017"
+output: pdf_document
+---
+Below are descriptive statistics of the benthic macroinvertebrate communities in 56 "Trend Lakes" i.e. undisturbed lakes from across Sweden. The samples were taken in August, September, October, or November in the littoral zone between the years 1995 and 2015.
+```{r mapsetup, include=FALSE}
+library(maptools)
+library(RColorBrewer)
+library(ggplot2)
+library(ggmap)
+library(rgdal)
+library(proj4)
+library(rgeos)
+library(sf)
+library(raster)
+LC <- read.csv("file:///C:/Users/hhen0001/Documents/Stability_BMI_56Lakes/LN_fromEmma/To Hannah/LakeCoordsSWEREF.csv", header=TRUE)
+setwd("C:/Users/hhen0001/Documents/Stability_BMI_56Lakes/LN_fromEmma/To Hannah")
+map <- readOGR("limnorrl.shp")
+map_wgs84 <- spTransform(map, CRS("+proj=longlat +datum=WGS84"))
+centroid <- gCentroid(map_wgs84)
+mapImageData1 <- get_map(location = c(lon = centroid$x, lat = centroid$y), color = "color", source = "google", maptype = "satellite", zoom=4)
+polys = fortify(map_wgs84)
+colors = brewer.pal(9, "Greys")
+```
+```{r lakeloc, echo=FALSE, fig.width=6, fig.height=8, warning= FALSE, fig.pos='htb!'}
+ggmap(mapImageData1) +
+  geom_polygon(aes(x = long, y = lat, group = group),
+               data = polys,
+               color = colors[9],
+               fill = colors[6],
+               alpha = 0.5) +
+  geom_point(aes(x=X, y=Y), data=LC, size=1.5, col="red3")+
+  labs(x = "Longitude", y = "Latitude") + ggtitle("Lake Locations")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+```{r BMIcleanup, include=FALSE}
+source("file:///C:/Users/hhen0001/Documents/Stability_BMI_56Lakes/Scripts/SpUseDD.R")
+library("reshape")
+library("vegan")
+library("lme4")
+library("zoo")
+library("arm")
+library("labdsv")
+library("plyr")
+library("dplyr")
+
+Full <- read.csv("file:///C:/Users/hhen0001/Documents/Stability_BMI_56Lakes/Data Files/BiologicalData/BiologicalData_BMI_CSV_woCommas.csv", sep=",", header=TRUE)
+Full$Year <- as.factor(Full$Provtagningsår)
+Full$Month <- as.factor(Full$Provtagningsmånad)
+Full$Lake <- Full$Stationsnamn
+Full2 <- Full[Full$Month=="10" | Full$Month=="9"| Full$Month=="11"| Full$Month=="8",]
+Full3 <- Full2[Full2$Vattenzon.P.L.SP.=="Litoral",]
+TM <- cast(Full3, Lake + Year + Stationskoordinat.N.X ~ Taxonnamn, value="Medelantal.per.prov", fun.aggregate=sum)
+TM2 <- as.data.frame(TM)
+##above is forming data into species matrix for further analysis
+
+SY <- table(TM2$Stationskoordinat.N.X, TM2$Year)
+SY2 <- as.data.frame.matrix(SY)
+SY3 <- SY2[apply(SY2, MARGIN = 1, function(x) all(x > 0, x < 3)), ] ##No lakes sampled in all years because of 2016
+SY4 <- SY2[rowSums(SY2 > 0) >= 21,] ##56 lakes sampled in 1995-2015
+##above to figure out which lakes were sampled in all years
+
+AYsmp <- as.factor(rownames(SY4))
+AYSmp2 <- TM2[TM2$Stationskoordinat.N.X %in% AYsmp,]
+AYSmp2$Lake <- factor(AYSmp2$Lake)
+SpUse <- append(SpUse, c("Lake", "Year", "Stationskoordinat.N.X"))
+AYSmp3 <- AYSmp2[,which(names(AYSmp2) %in% SpUse)]
+AYSmp3[is.na(AYSmp3)] <- 0
+##above to subset by lakes sampled in all years and taxa screened by David
+
+AYSmp4 <- AYSmp3[,c(TRUE, TRUE, TRUE, colSums(AYSmp3[,4:length(AYSmp3)]) > 10)]
+
+DCA <- decorana(AYSmp3[,4:length(AYSmp3)], iweigh=1)
+SpSc <- as.data.frame(scores(decorana(AYSmp3[,4:length(AYSmp3)]), iweigh=1, choices=c(1,2), display="sites"))
+SpScDCA1 <- SpSc[order(-abs(SpSc[,1])),]
+SpScDCA2 <- SpSc[order(-abs(SpSc[,2])),]
+
+CP <- read.csv("file:///C:/Users/hhen0001/Documents/Stability_BMI_56Lakes/Data Files/PhysChemData/PhysChem_CSVwoCommas.csv", sep=",", header=TRUE)
+CP$Year <- as.factor(CP$Provtagningsår)
+CP$Month <- as.factor(CP$Provtagningsmånad)
+CP$Lake <- CP$Stationsnamn
+CP2 <- CP[CP$Year=="1995" | CP$Year=="1996" | CP$Year=="1997" |CP$Year=="1998" |CP$Year=="1999" |CP$Year=="2000" |CP$Year=="2001" |CP$Year=="2002" |CP$Year=="2003" |CP$Year=="2004" |CP$Year=="2005" |CP$Year=="2006" |CP$Year=="2007" |CP$Year=="2008" |CP$Year=="2009" |CP$Year=="2010" |CP$Year=="2011" |CP$Year=="2012" |CP$Year=="2013" |CP$Year=="2014" |CP$Year=="2015",]
+CP3 <- CP2[CP2$Month=="8" | CP2$Month=="10" | CP2$Month=="9"| CP2$Month=="11",]
+##mean values for months 8,9,10,11 and when there are multiple months represented
+CP4<- CP3[CP3$Stationskoordinat.N.X %in% AYSmp3$Stationskoordinat.N.X,]
+CP4$Measurements <- as.numeric(levels(CP4$Värde.Koncentration))[CP4$Värde.Koncentration]
+CP5 <- cast(CP4, Lake + Year + Stationskoordinat.N.X ~ Parameter, value="Measurements", fun.aggregate=mean)
+colnames(CP5) <- c("Lake", "Year", "Latitude", "Chlorophyll", "pH", "VisibilityDepth", "Sulfate", "TOC", "TotalP", "WaterTemp.")
+
+
+NMDS <- metaMDS(AYSmp3[,4:length(AYSmp3)], k=2, maxit=100, sratmax=0.999999, noshare=0.1)
+NMDSscores <- as.data.frame(scores(NMDS, choices=c(1,2), display="sites"))
+BI4 <- cbind(SpSc, CP5)
+BI4$Chlorophyll2<- c(3.2, na.approx(BI4$Chlorophyll))
+BI4$VisibilityDepth2<- na.approx(BI4$VisibilityDepth)
+BI4$WaterTemp2<- na.approx(BI4$WaterTemp.)
+BI4$Latitude <- as.numeric(BI4$Latitude)
+BI4$pH2 <- scale(BI4$pH)
+BI4$Lat2 <- scale(BI4$Latitude)
+BI4$TOC2 <- scale(BI4$TOC)
+BI4$TotalP2 <- scale(BI4$TotalP)
+BI4$Chl2 <- scale(BI4$Chlorophyll2)
+BI4$VD2 <- scale(BI4$VisibilityDepth2)
+BI4$WT2 <- scale(BI4$WaterTemp2)
+
+lm2 <- lmer(DCA1 ~ pH2 + Lat2 + TotalP2 + TOC2 + Chl2 + VD2 + WT2 + (1|Lake) + (1|Year), data=BI4)
+slm2 <- sim(lm2, 1000)
+fixef <- slm2@fixef
+fixefmean <- apply(fixef, 2, mean)
+fixefQ1 <- apply(fixef, 2, quantile, 0.025)
+fixefQ2 <- apply(fixef, 2, quantile, 0.975)
+CIs <- cbind(fixefmean, fixefQ1, fixefQ2)
+CIs <- as.data.frame(CIs)
+CIs$Variable <- c("Intercept","pH", "Latitude", "Total P", "TOC", "Chl", "VD", "Temp.")
+CI2 <- CIs[2:8, 1:4]
+colnames(CI2) <- c("Mean", "Lower CI", "Upper CI", "Env. Var.")
+
+lm3 <- lmer(DCA2 ~ pH2 + Lat2 + TotalP2 + TOC2 + Chl2 + VD2 + WT2 + (1|Lake) + (1|Year), data=BI4)
+slm3 <- sim(lm3, 1000)
+fixef2 <- slm3@fixef
+fixefmean2 <- apply(fixef2, 2, mean)
+fixefQ12 <- apply(fixef2, 2, quantile, 0.025)
+fixefQ22 <- apply(fixef2, 2, quantile, 0.975)
+CIs2 <- cbind(fixefmean2, fixefQ12, fixefQ22)
+CIs2 <- as.data.frame(CIs2)
+CIs2$Variable <- c("Intercept","pH", "Latitude", "Total P", "TOC", "Chl", "VD", "Temp.")
+CI22 <- CIs2[2:8, 1:4]
+colnames(CI22) <- c("Mean", "Lower CI", "Upper CI", "Env. Var.")
+
+lm4 <- lmer(NMDS1 ~ pH2 + Lat2 + TotalP2 + TOC2 + Chl2 + VD2 + WT2 + (1|Lake) + (1|Year), data=BI4)
+slm4 <- sim(lm4, 1000)
+fixef3 <- slm4@fixef
+fixefmean3 <- apply(fixef3, 2, mean)
+fixefQ13 <- apply(fixef3, 2, quantile, 0.025)
+fixefQ23 <- apply(fixef3, 2, quantile, 0.975)
+CIs3 <- cbind(fixefmean3, fixefQ13, fixefQ23)
+CIs3 <- as.data.frame(CIs3)
+CIs3$Variable <- c("Intercept","pH", "Latitude", "Total P", "TOC", "Chl", "VD", "Temp.")
+CI23 <- CIs3[2:8, 1:4]
+colnames(CI23) <- c("Mean", "Lower CI", "Upper CI", "Env. Var.")
+
+lm5 <- lmer(NMDS2 ~ pH2 + Lat2 + TotalP2 + TOC2 + Chl2 + VD2 + WT2 + (1|Lake) + (1|Year), data=BI4)
+slm5 <- sim(lm5, 1000)
+fixef4 <- slm5@fixef
+fixefmean4 <- apply(fixef4, 2, mean)
+fixefQ14 <- apply(fixef4, 2, quantile, 0.025)
+fixefQ24 <- apply(fixef4, 2, quantile, 0.975)
+CIs4 <- cbind(fixefmean4, fixefQ14, fixefQ24)
+CIs4 <- as.data.frame(CIs4)
+CIs4$Variable <- c("Intercept","pH", "Latitude", "Total P", "TOC", "Chl", "VD", "Temp.")
+CI24 <- CIs4[2:8, 1:4]
+colnames(CI24) <- c("Mean", "Lower CI", "Upper CI", "Env. Var.")
+
+weirdlake <- subset(AYSmp4[610:630,1:length(AYSmp4)])
+weirdlake2 <- weirdlake[, colSums(weirdlake != 0) > 0]
+weirdlake3 <- melt(weirdlake2[,c(2, 4:length(weirdlake2))], id='Year')
+colnames(weirdlake3) <- c("Year", "Species", "Abundance")
+ggplot(weirdlake3, aes(x = Year, y = Abundance, group = Species, colour = Species)) + geom_line() + ylim(0,260)
+
+WLchem <- subset(BI4[610:630,1:length(BI4)])
+WL2 <- melt(WLchem[,c(6, 18, 20: length(WLchem))], id='Year')
+colnames(WL2) <- c("Year", "Environmental_Variable", "Standardized_Measurement")
+```
+<br>
+``` {r spnum, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+boxplot(specnumber(AYSmp4[,4:length(AYSmp4)])~AYSmp4$Stationskoordinat.N.X, las=2, ylab="Number of species", type="l", main="Number of species in 56 lakes by lake latitude (across all years)")
+```
+<br>
+``` {r spnumyr, echo=FALSE, fig.width=12, fig.height=7, warning= FALSE}
+lty <- setNames(sample(1:12,56,T), levels(AYSmp4$Lake))
+ggplot(data = AYSmp4, aes(x = factor(Year), y = specnumber(AYSmp4[,4:length(AYSmp4)]), linetype = Lake, color = Lake)) + geom_line(aes(group = Lake)) + geom_point() + scale_linetype_manual(values = lty) + labs(x = "Year") + labs(y= "Species Richness")
+```
+
+``` {r spnumpercatch, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+hist(specnumber(AYSmp4[,4:length(AYSmp4)]), main="Number of species caught across 1176 sampling events (56 lakes, 21 years)", xlab="Number of species caught")
+```
+
+``` {r DCA, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+ordiplot(DCA, type="text", xlim=c(-6,6), main="DCA on downweighted abundances")
+```
+
+```
+lm <- lmer(DCA1 ~ pH2 + Lat2 + TotalP2 + TOC2 + Chl2 + VD2 + WT2 + (1|Lake) + (1|Year), data=BI4)
+slm2 <- sim(lm, 1000)
+fixef <- slm2@fixef
+fixefmean <- apply(fixef, 2, mean)
+fixefQ1 <- apply(fixef, 2, quantile, 0.025)
+fixefQ2 <- apply(fixef, 2, quantile, 0.975)
+
+```
+
+```{r CIs, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+par(mar=c(3,6,3,2))
+plot(CI2$Mean, 1:7, xlim=c(-0.35,0.3), yaxt="n", ylab='', pch=19, xlab='', main="95% Credible Intervals DCA1")
+segments(CI2$`Lower CI`, 1:7, CI2$`Upper CI`, 1:7, lwd=2.5)
+abline(v=0, lty=2)
+axis(2, 1:7, CI2$`Env. Var.`, las=2)
+```
+
+```{r CIs2, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+par(mar=c(3,6,3,2))
+plot(CI22$Mean, 1:7, xlim=c(-0.35,0.3), yaxt="n", ylab='', pch=19, xlab='', main="95% Credible Intervals DCA2")
+segments(CI22$`Lower CI`, 1:7, CI22$`Upper CI`, 1:7, lwd=2.5)
+abline(v=0, lty=2)
+axis(2, 1:7, CI22$`Env. Var.`, las=2)
+```
+
+``` {r NMDS, echo=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+ordiplot(NMDS, type="text", main="NMDS on sp. abundances")
+```
+
+```{r CIsNMDS, include=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+par(mar=c(3,6,3,2))
+plot(CI23$Mean, 1:7, xlim=c(-0.35,0.3), yaxt="n", ylab='', pch=19, xlab='', main="95% Credible Intervals NMDS1")
+segments(CI23$`Lower CI`, 1:7, CI23$`Upper CI`, 1:7, lwd=2.5)
+abline(v=0, lty=2)
+axis(2, 1:7, CI23$`Env. Var.`, las=2)
+```
+
+```{r CIs2NMDS, include=FALSE, fig.width=12, fig.height=8, warning= FALSE}
+par(mar=c(3,6,3,2))
+plot(CI24$Mean, 1:7, xlim=c(-0.35,0.3), yaxt="n", ylab='', pch=19, xlab='', main="95% Credible Intervals NMDS2")
+segments(CI24$`Lower CI`, 1:7, CI24$`Upper CI`, 1:7, lwd=2.5)
+abline(v=0, lty=2)
+axis(2, 1:7, CI24$`Env. Var.`, las=2)
+```
+
+```{r Lillesjo, echo=FALSE, warning= FALSE, fig.width=16, fig.height=8}
+ggplot(weirdlake3, aes(x = Year, y = Abundance, group = Species, colour = Species)) + geom_line() + ylim(0,260) + labs(title="Lillesjö invert. abundances")
+```
+
+```{r Lillesjochem, echo=FALSE, warning= FALSE, fig.width=16, fig.height=8}
+ggplot(WL2, aes(x = Year, y = Standardized_Measurement, group = Environmental_Variable, colour = Environmental_Variable)) + geom_line() + labs(title="Lillesjö chem. data")
+```
